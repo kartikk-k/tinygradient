@@ -108,11 +108,15 @@ const VERT = \`${vert}\`;
 const FRAG = \`${frag}\`;
 
 function compileShader(gl: WebGLRenderingContext, type: number, src: string) {
-  const s = gl.createShader(type)!;
+  const s = gl.createShader(type);
+  if (!s) return null;
   gl.shaderSource(s, src);
   gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-    console.error(gl.getShaderInfoLog(s));
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s) || "shader failed to compile");
+    gl.deleteShader(s);
+    return null;
+  }
   return s;
 }
 
@@ -131,11 +135,33 @@ export default function GradientShader({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const gl = canvas.getContext("webgl", { antialias: true })!;
+    // A canvas hands back the same context object every time, so a context
+    // that was lost earlier stays lost — bail instead of issuing GL calls
+    // that would all quietly return null.
+    const ctx = canvas.getContext("webgl", { antialias: true });
+    if (!ctx || ctx.isContextLost()) return;
+    const gl = ctx;
+
+    const vert = compileShader(gl, gl.VERTEX_SHADER, VERT);
+    const frag = compileShader(gl, gl.FRAGMENT_SHADER, FRAG);
+    if (!vert || !frag) {
+      if (vert) gl.deleteShader(vert);
+      if (frag) gl.deleteShader(frag);
+      return;
+    }
+
     const prog = gl.createProgram()!;
-    gl.attachShader(prog, compileShader(gl, gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compileShader(gl, gl.FRAGMENT_SHADER, FRAG));
+    gl.attachShader(prog, vert);
+    gl.attachShader(prog, frag);
     gl.linkProgram(prog);
+    // The linked program keeps its own copy, so the shader objects are free.
+    gl.deleteShader(vert);
+    gl.deleteShader(frag);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(prog) || "program failed to link");
+      gl.deleteProgram(prog);
+      return;
+    }
     gl.useProgram(prog);
 
     const buf = gl.createBuffer();
@@ -262,7 +288,10 @@ export default function GradientShader({
       gl.deleteTexture(tex);
       gl.deleteBuffer(buf);
       gl.deleteProgram(prog);
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // Deliberately NOT calling WEBGL_lose_context.loseContext() here: the
+      // canvas would hand the same dead context back to the next effect run
+      // (React Strict Mode, Fast Refresh, or a "mode" change), and every GL
+      // call on it returns null. Dropping the references is enough.
     };
   }, [mode]);
 

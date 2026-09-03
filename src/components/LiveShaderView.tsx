@@ -59,8 +59,11 @@ export default function LiveShaderView({ item }: { item: CollectionItem }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // A canvas hands back the same context object every time, so a context
+    // that was lost earlier stays lost — bail instead of issuing GL calls
+    // that would all quietly return null.
     const gl = canvas.getContext("webgl", { antialias: true });
-    if (!gl) return;
+    if (!gl || gl.isContextLost()) return;
 
     const vs = gl.createShader(gl.VERTEX_SHADER)!;
     gl.shaderSource(vs, VERT); gl.compileShader(vs);
@@ -184,7 +187,10 @@ export default function LiveShaderView({ item }: { item: CollectionItem }) {
       gl.deleteProgram(prog);
       gl.deleteShader(vs);
       gl.deleteShader(fs);
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // Deliberately NOT calling WEBGL_lose_context.loseContext() here: the
+      // canvas would hand the same dead context back to the next effect run
+      // (React Strict Mode, Fast Refresh, or an `item` change), and every GL
+      // call on it returns null. Dropping the references is enough.
     };
   }, [item]);
 
